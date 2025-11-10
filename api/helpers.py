@@ -1,7 +1,7 @@
 """
 api/helpers.py
 Robust helpers for fetching NBA data using nba_api v1.10.x.
-Includes retries, rate-limits and fallbacks.
+Includes retries, rate-limits, headers, and retry loops for all endpoints.
 """
 
 import time
@@ -21,8 +21,7 @@ from nba_api.stats.endpoints import (
     commonplayerinfo,
 )
 
-# --- NEW: BROWSER HEADERS ---
-# This makes our bot look like a real browser to bypass firewalls
+# --- BROWSER HEADERS ---
 HEADERS = {
     'Accept': 'application/json, text/plain, */*',
     'Accept-Encoding': 'gzip, deflate, br, zstd',
@@ -33,6 +32,30 @@ HEADERS = {
     'Referer': 'https://www.nba.com/',
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
 }
+# --- END NEW ---
+
+# --- NEW: GLOBAL RETRY WRAPPER ---
+def _nba_api_request_wrapper(api_call_function, call_name):
+    """
+    Aggressively retries any nba_api function that fails.
+    """
+    MAX_RETRIES = 5
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"[helpers] [{call_name}] Attempt {attempt}/{MAX_RETRIES}...")
+        try:
+            # Run the provided function (which is a lambda)
+            result = api_call_function() 
+            print(f"[helpers] [{call_name}] Success.")
+            return result # Return on success
+        except Exception as e:
+            print(f"[helpers] [{call_name}] Attempt {attempt} failed: {e}")
+            if attempt == MAX_RETRIES:
+                print(f"[helpers] [{call_name}] All retries failed.")
+                return None # Failed all attempts
+            
+            sleep_time = 5 * attempt # 5s, 10s, 15s, 20s
+            print(f"[helpers] Retrying in {sleep_time} seconds...")
+            time.sleep(sleep_time)
 # --- END NEW ---
 
 
@@ -80,9 +103,6 @@ def rate_limit():
 # Schedule / scoreboard
 # -----------------------
 def get_upcoming_games(days=2):
-    """
-    Return list of upcoming games for the next `days`.
-    """
     games_list = []
     today = datetime.now()
 
@@ -90,46 +110,49 @@ def get_upcoming_games(days=2):
         d = today + timedelta(days=offset)
         date_str = d.strftime("%Y-%m-%d")
         print(f"[helpers] Fetching scoreboard for {date_str}...")
-        rate_limit()
-        try:
-            # --- FIX: Add headers and timeout ---
-            sb = scoreboardv2.ScoreboardV2(
+        
+        # --- USE RETRY WRAPPER ---
+        sb = _nba_api_request_wrapper(
+            lambda: scoreboardv2.ScoreboardV2(
                 game_date=date_str,
                 timeout=60,
                 headers=HEADERS 
-            )
-            # --- END FIX ---
+            ),
+            f"ScoreboardV2({date_str})"
+        )
+        
+        if sb is None:
+            print(f"[helpers][FATAL] Skipping day {date_str} after all retries.")
+            continue
+        # --- END WRAPPER ---
             
-            gh = sb.game_header.get_data_frame() 
-            
-            if gh is None or gh.empty:
-                print(f"[helpers] No games found on {date_str}")
+        gh = sb.game_header.get_data_frame() 
+        
+        if gh is None or gh.empty:
+            print(f"[helpers] No games found on {date_str}")
+            continue
+
+        for _, row in gh.iterrows():
+            try:
+                home_obj = find_team_by_id_replacement(int(row['HOME_TEAM_ID']))
+                away_obj = find_team_by_id_replacement(int(row['VISITOR_TEAM_ID']))
+            except Exception as e:
+                print(f"[helpers][WARN] find_team_by_id_replacement failed: {e}")
                 continue
 
-            for _, row in gh.iterrows():
-                try:
-                    home_obj = find_team_by_id_replacement(int(row['HOME_TEAM_ID']))
-                    away_obj = find_team_by_id_replacement(int(row['VISITOR_TEAM_ID']))
-                except Exception as e:
-                    print(f"[helpers][WARN] find_team_by_id_replacement failed: {e}")
-                    continue
+            if not home_obj or not away_obj:
+                print(f"[helpers][WARN] Could not find team objects for game {row.get('GAME_ID')}")
+                continue
 
-                if not home_obj or not away_obj:
-                    print(f"[helpers][WARN] Could not find team objects for game {row.get('GAME_ID')}")
-                    continue
-
-                games_list.append({
-                    "game_id": row.get("GAME_ID"),
-                    "game_date": date_str,
-                    "home": home_obj.get("abbreviation"),
-                    "away": away_obj.get("abbreviation"),
-                    "home_team_name": home_obj.get("full_name"),
-                    "away_team_name": away_obj.get("full_name"),
-                    "game_description": f"{away_obj.get('abbreviation')} @ {home_obj.get('abbreviation')}"
-                })
-        except Exception as e:
-            print(f"[helpers][ERROR] Scoreboard fetch failed for {date_str}: {e}")
-            continue
+            games_list.append({
+                "game_id": row.get("GAME_ID"),
+                "game_date": date_str,
+                "home": home_obj.get("abbreviation"),
+                "away": away_obj.get("abbreviation"),
+                "home_team_name": home_obj.get("full_name"),
+                "away_team_name": away_obj.get("full_name"),
+                "game_description": f"{away_obj.get('abbreviation')} @ {home_obj.get('abbreviation')}"
+            })
 
     print(f"[helpers] Found {len(games_list)} upcoming games.")
     return games_list
@@ -139,45 +162,35 @@ def get_upcoming_games(days=2):
 # Team stats
 # -----------------------
 def get_team_stats(season="2025-26"):
-    """
-    Returns team-level advanced stats DataFrame.
-    """
     print("[helpers] Fetching team stats...")
-    rate_limit()
-    try:
-        try:
-            # --- FIX: Add headers and timeout ---
-            stats = leaguedashteamstats.LeagueDashTeamStats(
-                season=season, 
-                measure_type_detailed_defense="Advanced",
-                timeout=60,
-                headers=HEADERS
-            )
-        except TypeError:
-            stats = leaguedashteamstats.LeagueDashTeamStats(
-                season=season,
-                timeout=60,
-                headers=HEADERS
-            )
-        # --- END FIX ---
-        
-        df = stats.league_dash_team_stats.get_data_frame() 
-        
-        if df is None:
-            return pd.DataFrame()
-        return df.copy()
-    except Exception as e:
-        print(f"[helpers][ERROR] get_team_stats failed: {e}")
+    
+    # --- USE RETRY WRAPPER ---
+    stats = _nba_api_request_wrapper(
+        lambda: leaguedashteamstats.LeagueDashTeamStats(
+            season=season, 
+            measure_type_detailed_defense="Advanced",
+            timeout=60,
+            headers=HEADERS
+        ),
+        f"LeagueDashTeamStats({season})"
+    )
+    
+    if stats is None:
         return pd.DataFrame()
+    # --- END WRAPPER ---
+    
+    df = stats.league_dash_team_stats.get_data_frame() 
+    if df is None:
+        return pd.DataFrame()
+    return df.copy()
 
 
 # -----------------------
 # Players / rosters
 # -----------------------
 def get_all_active_players():
-    """Return all active players as a pandas DataFrame (id, full_name, position, team)."""
     print("[helpers] Fetching all active players...")
-    rate_limit()
+    rate_limit() # This one is static, no headers needed
     try:
         plist = players.get_players()
         df = pd.DataFrame(plist)
@@ -189,11 +202,7 @@ def get_all_active_players():
 
 
 def get_team_roster(team_abbrev, season="2025-26"):
-    """
-    Return a team's roster as list[{'id', 'full_name'}].
-    """
     print(f"[helpers] Fetching roster for {team_abbrev}...")
-    rate_limit()
     try:
         team_obj = teams.find_team_by_abbreviation(team_abbrev)
         if not team_obj:
@@ -201,14 +210,20 @@ def get_team_roster(team_abbrev, season="2025-26"):
             return []
         team_id = team_obj["id"]
         
-        # --- FIX: Add headers and timeout ---
-        roster = commonteamroster.CommonTeamRoster(
-            team_id=team_id, 
-            season=season,
-            timeout=60,
-            headers=HEADERS
+        # --- USE RETRY WRAPPER ---
+        roster = _nba_api_request_wrapper(
+            lambda: commonteamroster.CommonTeamRoster(
+                team_id=team_id, 
+                season=season,
+                timeout=60,
+                headers=HEADERS
+            ),
+            f"CommonTeamRoster({team_abbrev})"
         )
-        # --- END FIX ---
+        
+        if roster is None:
+            return []
+        # --- END WRAPPER ---
         
         rdf = roster.common_team_roster.get_data_frame()
         
@@ -225,40 +240,32 @@ def get_team_roster(team_abbrev, season="2025-26"):
 # Player logs
 # -----------------------
 def get_player_game_logs(player_id, season="2025-26"):
-    """
-    Return PlayerGameLog DataFrame for a given player and season.
-    Retries on transient errors; returns None if not available.
-    """
     print(f"[helpers] Fetching game logs for player {player_id}, season {season}...")
-    attempts = 3
-    for attempt in range(1, attempts + 1):
-        rate_limit() # This is 1.5 second
-        try:
-            # --- FIX: Add headers and timeout ---
-            logs = playergamelog.PlayerGameLog(
-                player_id=player_id, 
-                season=season,
-                timeout=60,
-                headers=HEADERS
-            )
-            # --- END FIX ---
-            
-            df = logs.player_game_log.get_data_frame() 
-            
-            if df is None or df.empty:
-                print(f"[helpers][INFO] No game logs found for player {player_id} season {season}")
-                return None
-            return df.copy() # Success
-        except Exception as e:
-            print(f"[helpers][WARN] get_player_game_logs attempt {attempt} failed for {player_id}: {e}")
-            if attempt == attempts:
-                return None # Failed all attempts
-            print(f"[helpers] Retrying in 3 seconds...")
-            time.sleep(3.0) 
+    
+    # --- USE RETRY WRAPPER ---
+    logs = _nba_api_request_wrapper(
+        lambda: playergamelog.PlayerGameLog(
+            player_id=player_id, 
+            season=season,
+            timeout=60,
+            headers=HEADERS
+        ),
+        f"PlayerGameLog({player_id}, {season})"
+    )
+    
+    if logs is None:
+        return None
+    # --- END WRAPPER ---
+
+    df = logs.player_game_log.get_data_frame() 
+    if df is None or df.empty:
+        print(f"[helpers][INFO] No game logs found for player {player_id} season {season}")
+        return None
+    return df.copy()
 
 
 def get_player_position(player_name):
-    """Return player POSITION string (Guard/Forward/Center), best-effort via commonplayerinfo."""
+    print(f"[helpers] Fetching position for {player_name}...")
     rate_limit()
     try:
         candidates = players.find_players_by_full_name(player_name)
@@ -266,16 +273,21 @@ def get_player_position(player_name):
             return "N/A"
         pid = candidates[0]["id"]
         
-        # --- FIX: Add headers and timeout ---
-        info = commonplayerinfo.CommonPlayerInfo(
-            player_id=pid,
-            timeout=60,
-            headers=HEADERS
+        # --- USE RETRY WRAPPER ---
+        info = _nba_api_request_wrapper(
+            lambda: commonplayerinfo.CommonPlayerInfo(
+                player_id=pid,
+                timeout=60,
+                headers=HEADERS
+            ),
+            f"CommonPlayerInfo({player_name})"
         )
-        # --- END FIX ---
+        
+        if info is None:
+            return "N/A"
+        # --- END WRAPPER ---
         
         df = info.common_player_info.get_data_frame()
-        
         if "POSITION" in df.columns:
             return df["POSITION"].values[0]
         return "N/A"
@@ -283,11 +295,6 @@ def get_player_position(player_name):
         return "N/A"
 
 def get_head_to_head_history(all_player_logs_df, opponent_abbrev):
-    """
-    Filters a provided DataFrame of game logs for H2H games
-    against a specific opponent.
-    Returns DataFrame or empty DataFrame.
-    """
     print(f"[helpers] Filtering H2H logs vs {opponent_abbrev}...")
     try:
         if all_player_logs_df is None or all_player_logs_df.empty:
@@ -300,7 +307,6 @@ def get_head_to_head_history(all_player_logs_df, opponent_abbrev):
             return filtered
         else:
             return pd.DataFrame()
-
     except Exception as e:
         print(f"[helpers][ERROR] get_head_to_head_history (filtering) failed: {e}")
         return pd.DataFrame()
@@ -310,9 +316,7 @@ def get_head_to_head_history(all_player_logs_df, opponent_abbrev):
 # DVP scraping
 # -----------------------
 def scrape_dvp_stats():
-    """
-    Scrape HashtagBasketball DVP tables. Returns nested dict by position and team.
-    """
+    # This scrapes a different website, so it doesn't need the NBA headers
     url = "https://hashtagbasketball.com/nba-defense-vs-position"
     print("[helpers] Scraping DVP stats...")
     try:
@@ -320,7 +324,7 @@ def scrape_dvp_stats():
         if resp.status_code != 200:
             print(f"[helpers][WARN] DVP scrape returned {resp.status_code}")
             return {}
-
+        # ... (rest of DVP scraping is unchanged) ...
         soup = BeautifulSoup(resp.content, "html.parser")
         position_ids = {
             "PG": "ContentPlaceHolder1_GridViewDVP",
