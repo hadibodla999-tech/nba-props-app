@@ -205,3 +205,27 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- Custom Rules for NBA Props App ---
+
+# Node.js / React
+node_modules/
+.vite/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vercel deployment
+.vercel/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# SECRETS
+# This is the most important line!
+# It blocks your Firebase Admin key.
+nba-props-app-57fec-firebase-adminsdk-fbsvc-cd74aaf81d.json
+*.pkl
