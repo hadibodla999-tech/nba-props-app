@@ -21,6 +21,21 @@ from nba_api.stats.endpoints import (
     commonplayerinfo,
 )
 
+# --- NEW: BROWSER HEADERS ---
+# This makes our bot look like a real browser to bypass firewalls
+HEADERS = {
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Encoding': 'gzip, deflate, br, zstd',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Connection': 'keep-alive',
+    'Host': 'stats.nba.com',
+    'Origin': 'https://www.nba.com',
+    'Referer': 'https://www.nba.com/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+}
+# --- END NEW ---
+
+
 # Map from human team name to abbreviation for DVP scraping fallback
 TEAM_NAME_TO_ABBREV = {
     'Atlanta Hawks': 'ATL', 'Boston Celtics': 'BOS', 'Brooklyn Nets': 'BKN',
@@ -35,14 +50,9 @@ TEAM_NAME_TO_ABBREV = {
     'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS'
 }
 
-# --- FIX for nba_api 1.10.x ---
 _team_id_lookup = None
 
 def _get_team_by_id_lookup():
-    """
-    Creates and caches a dictionary mapping team ID to team object.
-    This replaces the removed 'find_team_by_id' function.
-    """
     global _team_id_lookup
     if _team_id_lookup is None:
         print("[helpers] Initializing team ID lookup cache...")
@@ -52,23 +62,17 @@ def _get_team_by_id_lookup():
     return _team_id_lookup
 
 def find_team_by_id_replacement(team_id):
-    """
-    Replacement for the removed teams.find_team_by_id(team_id).
-    """
     lookup = _get_team_by_id_lookup()
     try:
         return lookup.get(int(team_id))
     except (ValueError, TypeError):
         return None
-# --- End of FIX ---
-
 
 # -----------------------
 # Rate limiting helper
 # -----------------------
 def rate_limit():
     """Small sleep to avoid hammering stats.nba.com"""
-    # Increased to 1.5s to be safer against rate-limits
     time.sleep(1.5)
 
 
@@ -88,7 +92,14 @@ def get_upcoming_games(days=2):
         print(f"[helpers] Fetching scoreboard for {date_str}...")
         rate_limit()
         try:
-            sb = scoreboardv2.ScoreboardV2(game_date=date_str)
+            # --- FIX: Add headers and timeout ---
+            sb = scoreboardv2.ScoreboardV2(
+                game_date=date_str,
+                timeout=60,
+                headers=HEADERS 
+            )
+            # --- END FIX ---
+            
             gh = sb.game_header.get_data_frame() 
             
             if gh is None or gh.empty:
@@ -135,9 +146,20 @@ def get_team_stats(season="2025-26"):
     rate_limit()
     try:
         try:
-            stats = leaguedashteamstats.LeagueDashTeamStats(season=season, measure_type_detailed_defense="Advanced")
+            # --- FIX: Add headers and timeout ---
+            stats = leaguedashteamstats.LeagueDashTeamStats(
+                season=season, 
+                measure_type_detailed_defense="Advanced",
+                timeout=60,
+                headers=HEADERS
+            )
         except TypeError:
-            stats = leaguedashteamstats.LeagueDashTeamStats(season=season)
+            stats = leaguedashteamstats.LeagueDashTeamStats(
+                season=season,
+                timeout=60,
+                headers=HEADERS
+            )
+        # --- END FIX ---
         
         df = stats.league_dash_team_stats.get_data_frame() 
         
@@ -178,7 +200,15 @@ def get_team_roster(team_abbrev, season="2025-26"):
             print(f"[helpers][WARN] team not found for abbrev {team_abbrev}")
             return []
         team_id = team_obj["id"]
-        roster = commonteamroster.CommonTeamRoster(team_id=team_id, season=season)
+        
+        # --- FIX: Add headers and timeout ---
+        roster = commonteamroster.CommonTeamRoster(
+            team_id=team_id, 
+            season=season,
+            timeout=60,
+            headers=HEADERS
+        )
+        # --- END FIX ---
         
         rdf = roster.common_team_roster.get_data_frame()
         
@@ -202,9 +232,17 @@ def get_player_game_logs(player_id, season="2025-26"):
     print(f"[helpers] Fetching game logs for player {player_id}, season {season}...")
     attempts = 3
     for attempt in range(1, attempts + 1):
-        rate_limit() # This is now 1.5 second
+        rate_limit() # This is 1.5 second
         try:
-            logs = playergamelog.PlayerGameLog(player_id=player_id, season=season)
+            # --- FIX: Add headers and timeout ---
+            logs = playergamelog.PlayerGameLog(
+                player_id=player_id, 
+                season=season,
+                timeout=60,
+                headers=HEADERS
+            )
+            # --- END FIX ---
+            
             df = logs.player_game_log.get_data_frame() 
             
             if df is None or df.empty:
@@ -215,11 +253,8 @@ def get_player_game_logs(player_id, season="2025-26"):
             print(f"[helpers][WARN] get_player_game_logs attempt {attempt} failed for {player_id}: {e}")
             if attempt == attempts:
                 return None # Failed all attempts
-            # --- FIX ---
-            # Wait 3 seconds on failure before retrying
             print(f"[helpers] Retrying in 3 seconds...")
             time.sleep(3.0) 
-            # --- END OF FIX ---
 
 
 def get_player_position(player_name):
@@ -230,7 +265,14 @@ def get_player_position(player_name):
         if not candidates:
             return "N/A"
         pid = candidates[0]["id"]
-        info = commonplayerinfo.CommonPlayerInfo(player_id=pid)
+        
+        # --- FIX: Add headers and timeout ---
+        info = commonplayerinfo.CommonPlayerInfo(
+            player_id=pid,
+            timeout=60,
+            headers=HEADERS
+        )
+        # --- END FIX ---
         
         df = info.common_player_info.get_data_frame()
         
@@ -240,7 +282,6 @@ def get_player_position(player_name):
     except Exception:
         return "N/A"
 
-# --- EFFICIENT H2H FIX ---
 def get_head_to_head_history(all_player_logs_df, opponent_abbrev):
     """
     Filters a provided DataFrame of game logs for H2H games
@@ -253,19 +294,16 @@ def get_head_to_head_history(all_player_logs_df, opponent_abbrev):
             return pd.DataFrame()
         
         if "MATCHUP" in all_player_logs_df.columns:
-            # Filter the existing DataFrame by the MATCHUP column
             filtered = all_player_logs_df[
                 all_player_logs_df["MATCHUP"].str.contains(opponent_abbrev, na=False)
             ].copy()
             return filtered
         else:
-            # If MATCHUP column is missing, we can't filter
             return pd.DataFrame()
 
     except Exception as e:
         print(f"[helpers][ERROR] get_head_to_head_history (filtering) failed: {e}")
         return pd.DataFrame()
-# --- END OF FIX ---
 
 
 # -----------------------
@@ -343,14 +381,9 @@ def fetch_all_odds_events(api_key):
 
 
 def fetch_player_props_for_event(api_key, event_id):
-    """
-    Fetch and normalize player props for a given Odds API event id.
-    Returns mapping: { "Player Name": {"pts": {"line": x, "over_under": "Over x"}, ... } }
-    """
     if not api_key or not event_id:
         return {}
     try:
-        # --- FIX: Corrected the URL ---
         url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
         
         params = {

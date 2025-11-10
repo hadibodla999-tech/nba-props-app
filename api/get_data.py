@@ -49,7 +49,13 @@ def initialize_firebase():
                 print("[get_data] Using local service account file.")
                 cred = credentials.Certificate(local_key_path)
             else:
-                raise Exception("Local key file not found and ENV var missing.")
+                # If the first key isn't found, try the new one you generated
+                new_key_path = [f for f in os.listdir('.') if 'nba-props-app-57fec-firebase-adminsdk' in f]
+                if new_key_path:
+                    print(f"[get_data] Using new local key file: {new_key_path[0]}")
+                    cred = credentials.Certificate(new_key_path[0])
+                else:
+                    raise Exception("Local key file not found and ENV var missing.")
         else:
             print("[get_data] Using service account from ENV variable.")
             cred_dict = json.loads(cred_json)
@@ -224,8 +230,24 @@ def get_real_player_data():
                             if stat == "reb" and cand.get("reb"):
                                 book_line = cand["reb"]["line"]
                                 ou_str = cand["reb"]["over_under"]
+                        
+                        # --- NEW HIT RATE LOGIC ---
+                        line_for_hit_rate = book_line
+                        
+                        if line_for_hit_rate is None:
+                            # Fallback to season average
+                            stat_key_upper = stat.upper() # 'pts' -> 'PTS'
+                            
+                            # --- FIX: Handle PRA ---
+                            if stat_key_upper == 'PRA':
+                                line_for_hit_rate = features.get('PTS', 0) + features.get('REB', 0) + features.get('AST', 0)
+                            else:
+                                line_for_hit_rate = features.get(stat_key_upper, 0)
+                            # --- END FIX ---
 
-                        hit_rates = model.calculate_hit_rates(all_logs, stat, book_line)
+                        hit_rates = model.calculate_hit_rates(all_logs, stat, line_for_hit_rate)
+                        # --- END NEW LOGIC ---
+
                         pdata = {
                             "id": f"{player_id}-{stat}",
                             "gameId": game_id,
@@ -236,10 +258,10 @@ def get_real_player_data():
                             "opponent": opponent_abbrev,
                             "stat": stat,
                             "projection": round(float(projection), 2),
-                            "bookLine": book_line,
+                            "bookLine": book_line, 
                             "overUnder": ou_str,
                             "isStarter": True,
-                            "hitRate": {
+                            "hitRate": { 
                                 "L5": hit_rates.get("L5", 0),
                                 "L10": hit_rates.get("L10", 0),
                                 "Season": hit_rates.get("Season", 0)
@@ -264,7 +286,6 @@ def get_real_player_data():
 
 # --- NEW: Main execution block ---
 if __name__ == "__main__":
-    # This is what the GitHub Action "bot" will run
     db = initialize_firebase()
     if db:
         player_data = get_real_player_data()
