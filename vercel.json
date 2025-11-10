@@ -1,0 +1,17 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/get_data" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/get_data",
+      "schedule": "0 10 * * *" 
+    }
+  ],
+  "functions": {
+    "api/get_data.py": {
+      "maxDuration": 60 
+    }
+  }
+}
