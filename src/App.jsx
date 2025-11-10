@@ -6,7 +6,7 @@ import {
   getFirestore,
   doc,
   Timestamp,
-  onSnapshot, // <-- NEW: Use onSnapshot to listen for changes
+  onSnapshot, // <-- This listens for the bot's data
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
@@ -185,7 +185,6 @@ const getShortDate = (date) => {
 };
 
 // --- LOADING SCREEN COMPONENT ---
-// This is now the ONLY loading screen
 function LoadingScreen() {
   const [quoteVisible, setQuoteVisible] = useState(false);
 
@@ -241,7 +240,7 @@ function LoadingScreen() {
   );
 }
 
-// --- Components (Header, GameFilter, Filters, PlayerRow, PlayerTable, BetSheetPage... all are UNCHANGED) ---
+// --- Components ---
 
 /**
  * Header Component
@@ -317,14 +316,13 @@ function GameFilter({ allPlayers, selectedGameId, setSelectedGameId }) {
   const [dateLabels, setDateLabels] = useState({});
 
   useEffect(() => {
-    // 1. Derive unique games
     const gameMap = new Map();
     allPlayers.forEach((p) => {
-      if (!p.gameId || !p.gameDate || !p.gameDescription) return; // Skip players with missing data
+      if (!p.gameId || !p.gameDate || !p.gameDescription) return;
       if (!gameMap.has(p.gameId)) {
         gameMap.set(p.gameId, {
           id: p.gameId,
-          date: p.gameDate.split("T")[0], // Normalize date to YYYY-MM-DD
+          date: p.gameDate.split("T")[0],
           description: p.gameDescription,
         });
       }
@@ -339,7 +337,6 @@ function GameFilter({ allPlayers, selectedGameId, setSelectedGameId }) {
       }
     });
 
-    // 2. Group games by date
     const groups = {};
     sortedGames.forEach((game) => {
       if (!groups[game.date]) {
@@ -349,7 +346,6 @@ function GameFilter({ allPlayers, selectedGameId, setSelectedGameId }) {
     });
     setGamesByDate(groups);
 
-    // 3. Create date labels
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
@@ -364,7 +360,6 @@ function GameFilter({ allPlayers, selectedGameId, setSelectedGameId }) {
       } else if (dateISO === tomorrowISO) {
         labels[dateISO] = "Tomorrow";
       } else {
-        // Use T12:00:00Z to avoid timezone issues when creating the date object
         labels[dateISO] = getShortDate(new Date(dateISO + "T12:00:00Z"));
       }
     });
@@ -416,7 +411,7 @@ function GameFilter({ allPlayers, selectedGameId, setSelectedGameId }) {
 }
 
 /**
- * Filters Component
+ * Filters Component - THIS IS WHERE THE HIT RATE BUTTONS ARE
  */
 function Filters({
   searchTerm,
@@ -592,7 +587,7 @@ function PlayerRow({
         )}
       </td>
 
-      {/* Hit Rate */}
+      {/* Hit Rate - This uses the hitRateFilter state */}
       <td className="px-4 py-3 text-sm text-center text-gray-700 dark:text-gray-300 whitespace-nowrap">
         {player.hitRate[hitRateFilter]}
       </td>
@@ -629,11 +624,9 @@ function PlayerTable({
     const searchFiltered = gameFiltered.filter((p) =>
       p.playerName.toLowerCase().includes(searchTerm.toLowerCase())
     );
-    // Sort logic from your original app: starters first, then by projection
     const sortedData = [...searchFiltered].sort((a, b) => {
       if (a.isStarter && !b.isStarter) return -1;
       if (!a.isStarter && b.isStarter) return 1;
-      // Use a default projection of 0 if null/undefined
       const projA = a.projection || 0;
       const projB = b.projection || 0;
       return projB - projA;
@@ -740,16 +733,15 @@ function HomePage({
         selectedGameId={selectedGameId}
         setSelectedGameId={setSelectedGameId}
       />
+
+      {/* THIS COMPONENT CONTAINS THE HIT RATE BUTTONS */}
       <Filters
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
         hitRateFilter={hitRateFilter}
         setHitRateFilter={setHitRateFilter}
       />
-      {/* This table will now be empty until the data is loaded by the listener,
-        but it will not show a "loading" spinner, just "No players found."
-        This is fine.
-      */}
+
       <PlayerTable
         players={players}
         setPlayers={setPlayers}
@@ -826,7 +818,7 @@ function BetSheetPage({ betSheet, removePlayerFromBetSheet }) {
                     <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700 dark:text-gray-300">
                       {player.stat}
                     </td>
-                    <td className="px-4 py-3 whitespace-nowLrap text-sm font-medium">
+                    <td className="px-4 py-3 whitespace-nowrap text-sm font-medium">
                       {player.bookLine !== null ? (
                         <span
                           className={
@@ -872,15 +864,11 @@ export default function App() {
   // --- State ---
   const [page, setPage] = useState("home");
   const [darkMode, setDarkMode] = useState(false);
-
-  // --- NEW: Simplified Loading ---
-  // We are only "loading" until Firebase connects and gives us the cache.
   const [appLoading, setAppLoading] = useState(true);
-
   const [allPlayers, setAllPlayers] = useState([]);
   const [betSheet, setBetSheet] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [hitRateFilter, setHitRateFilter] = useState("L5");
+  const [hitRateFilter, setHitRateFilter] = useState("L5"); // <-- HIT RATE STATE
   const [selectedGameId, setSelectedGameId] = useState("all");
   const [authReady, setAuthReady] = useState(false);
   const [error, setError] = useState(null);
@@ -919,7 +907,6 @@ export default function App() {
   }, []);
 
   // --- NEW: Data Fetching Effect (Read-Only) ---
-  // This effect listens for the data prepared by the "bot"
   useEffect(() => {
     if (!authReady || !db) {
       console.log("Data Fetch: Waiting for auth to be ready.");
@@ -958,7 +945,6 @@ export default function App() {
           }
         } else {
           console.log("Data Fetch: Cache MISS. Waiting for bot to run.");
-          // This is normal if the bot hasn't run today yet
           setError(
             "No data found for today. The data-fetching bot may not have run yet."
           );
@@ -976,11 +962,9 @@ export default function App() {
 
     // Clean up the listener when the component unmounts
     return () => unsubscribe();
-  }, [authReady]); // Rerun this entire effect only when authReady changes
+  }, [authReady]);
 
   // --- Handlers ---
-
-  // Note: handleLoadScreenLoaded is no longer needed
 
   const toggleDarkMode = () => {
     setDarkMode((prev) => !prev);
@@ -999,7 +983,6 @@ export default function App() {
   // --- Render ---
 
   if (appLoading) {
-    // This now handles both initial auth and data loading
     return <LoadingScreen />;
   }
 
@@ -1032,11 +1015,10 @@ export default function App() {
             addPlayerToBetSheet={addPlayerToBetSheet}
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
-            hitRateFilter={hitRateFilter}
-            setHitRateFilter={setHitRateFilter}
+            hitRateFilter={hitRateFilter} // <-- STATE IS PASSED HERE
+            setHitRateFilter={setHitRateFilter} // <-- STATE IS PASSED HERE
             selectedGameId={selectedGameId}
             setSelectedGameId={setSelectedGameId}
-            // loading prop is removed, as appLoading handles it
           />
         ) : (
           <BetSheetPage
