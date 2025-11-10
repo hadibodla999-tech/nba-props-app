@@ -351,9 +351,7 @@ def fetch_player_props_for_event(api_key, event_id):
         return {}
     try:
         # --- FIX: Corrected the URL ---
-        # Was: f"httpswww.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
         url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
-        # --- END OF FIX ---
         
         params = {
             "apiKey": api_key,

@@ -1,7 +1,6 @@
-# --- Core server ---
-Flask==3.0.3
-Flask-Cors==4.0.1
+# --- Core serverless ---
 python-dotenv==1.0.1
+firebase-admin==6.5.0
 
 # --- Data & requests ---
 pandas==2.2.3
@@ -9,5 +8,5 @@ requests==2.32.3
 beautifulsoup4==4.12.3
 lxml==5.2.2
 
-# --- NBA data API (compatible with our helpers) ---
-nba_api==1.4.1
+# --- NBA data API (v1.10.2) ---
+nba_api==1.10.2

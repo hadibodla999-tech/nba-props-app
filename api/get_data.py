@@ -1,23 +1,22 @@
 """
 api/get_data.py
-Main entry for local dev: orchestrates helpers + model.
-Loads .env from project root (parent of api/).
+THIS IS NOW THE BOT SCRIPT. IT IS NOT A FLASK SERVER.
+It runs, fetches all data, and saves to Firestore.
 """
 
 import os
 import sys
 import json
-import time # <-- FIX: Import time
+import time
 from datetime import datetime
 import pandas as pd
 from dotenv import load_dotenv
 
-# --- TEST MODE ---
-# Set to False to process all games (production).
-TEST_MODE_ENABLED = False # <-- FIX: Set to False for production
-# --- END TEST MODE ---
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
 
-# make project root visible for imports when running `python api/get_data.py`
+# make project root visible for imports
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 try:
@@ -27,44 +26,94 @@ except Exception:
     import helpers
     import model
 
-# Load .env from project root (parent directory of this file)
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-env_path = os.path.join(project_root, ".env")
-if os.path.exists(env_path):
-    load_dotenv(env_path)
-else:
-    # fallback to default load (still tries current working dir)
-    load_dotenv()
+# Load .env file for local development
+print("[get_data] Loading .env file...")
+load_dotenv()
+
+# --- NEW: Firebase Admin Setup ---
+def initialize_firebase():
+    """
+    Initializes the Firebase Admin SDK.
+    It reads the secret key from an environment variable.
+    """
+    print("[get_data] Initializing Firebase Admin...")
+    try:
+        # GitHub Actions will provide this as a JSON string
+        cred_json = os.environ.get("FIREBASE_ADMIN_KEY")
+        if not cred_json:
+            print("[get_data][ERROR] FIREBASE_ADMIN_KEY env variable not set.")
+            # Fallback for local dev: load from the file you uploaded
+            # Ensure this file is in your .gitignore!
+            local_key_path = "nba-props-app-57fec-firebase-adminsdk-fbsvc-cd74aaf81d.json"
+            if os.path.exists(local_key_path):
+                print("[get_data] Using local service account file.")
+                cred = credentials.Certificate(local_key_path)
+            else:
+                raise Exception("Local key file not found and ENV var missing.")
+        else:
+            print("[get_data] Using service account from ENV variable.")
+            cred_dict = json.loads(cred_json)
+            cred = credentials.Certificate(cred_dict)
+
+        firebase_admin.initialize_app(cred)
+        print("[get_data] Firebase Admin initialized.")
+        return firestore.client()
+    except Exception as e:
+        print(f"[get_data][FATAL] Firebase Admin initialization failed: {e}")
+        return None
+
+# --- NEW: Firebase Write Function ---
+def save_data_to_firestore(db, data):
+    """
+    Saves the complete player data array to the daily cache doc.
+    """
+    try:
+        if not data:
+            print("[get_data][WARN] No data to save. Skipping Firestore write.")
+            return
+
+        today = datetime.now()
+        cache_key = today.strftime("%Y-%m-%d")
+        
+        # This matches the path your App.jsx is reading from
+        doc_ref = db.collection("artifacts").document("default-app-id").collection("public/data/nba_props_cache").document(cache_key)
+        
+        print(f"[get_data] Saving {len(data)} player props to Firestore at: {doc_ref.path}")
+        
+        # Serialize data for Firestore
+        payload = {
+            "playerData": json.dumps(data),
+            "timestamp": firestore.SERVER_TIMESTAMP,
+        }
+        
+        doc_ref.set(payload)
+        print("[get_data] Save to Firestore complete.")
+    except Exception as e:
+        print(f"[get_data][ERROR] Failed to save to Firestore: {e}")
+
+# --- Core Logic (Modified) ---
 
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY", None)
 
 def get_current_nba_season():
-    """
-    Calculates the current NBA season string (e.g., "2025-26")
-    based on the current date (season typically rolls over in October).
-    """
     now = datetime.now()
-    if now.month >= 10: # Season starts in October
+    if now.month >= 10:
         start_year = now.year
         end_year = str(now.year + 1)[-2:]
-    else: # Season is in the early months of the calendar year
+    else:
         start_year = now.year - 1
         end_year = str(now.year)[-2:]
     return f"{start_year}-{end_year}"
 
-# Use dynamic season calculation instead of hardcoding
 CURRENT_SEASON = get_current_nba_season()
 prior_year_start = int(CURRENT_SEASON.split('-')[0]) - 1
 prior_year_end = str(prior_year_start + 1)[-2:]
 PRIOR_SEASON = f"{prior_year_start}-{prior_year_end}"
 
-print(f"[get_data] Using CURRENT_SEASON: {CURRENT_SEASON}")
-print(f"[get_data] Using PRIOR_SEASON: {PRIOR_SEASON}")
-
-
 def get_real_player_data():
     start = datetime.now()
-    print("[get_data] --- API REQUEST START ---")
+    print("[get_data] --- BOT SCRIPT START ---")
+    print(f"[get_data] Using CURRENT_SEASON: {CURRENT_SEASON}")
 
     # STEP 1: fetch global data
     try:
@@ -101,10 +150,8 @@ def get_real_player_data():
         gdate = game.get("game_date")
         print(f"[get_data] Processing game {i+1}/{len(games)}: {desc} ({game_id})")
 
-        # Find event id in odds list if available (best-effort)
         event_id = None
         for ev in all_odds_events:
-            # best-effort match by team names
             if ev.get("id") and (game.get("home_team_name") in (ev.get("home_team") or "") or game.get("away_team_name") in (ev.get("away_team") or "")):
                 event_id = ev.get("id")
                 break
@@ -112,11 +159,9 @@ def get_real_player_data():
         if event_id:
             game_odds = helpers.fetch_player_props_for_event(ODDS_API_KEY, event_id)
 
-        # get rosters
         rosters = {}
         for t in (home, away):
-            if not t or t == "N/A":
-                continue
+            if not t or t == "N/A": continue
             try:
                 rosters[t] = helpers.get_team_roster(t, season=CURRENT_SEASON)
             except Exception as e:
@@ -149,8 +194,6 @@ def get_real_player_data():
                         continue
 
                     h2h = helpers.get_head_to_head_history(all_logs, opponent_abbrev)
-
-                    # position (best-effort)
                     pos = helpers.get_player_position(player_name)
 
                     features = model.build_enhanced_feature_vector(
@@ -159,7 +202,7 @@ def get_real_player_data():
                         team_abbrev=team_abbrev,
                         player_pos=pos,
                         dvp_data=dvp_data,
-                        head_to_head_games=h2h, # Pass the filtered DF
+                        head_to_head_games=h2h,
                         team_stats_df=team_stats_df
                     )
 
@@ -170,20 +213,17 @@ def get_real_player_data():
 
                         book_line = None
                         ou_str = None
-                        try:
-                            cand = game_odds.get(player_name, {})
-                            if cand:
-                                if stat == "pts" and cand.get("pts"):
-                                    book_line = cand["pts"]["line"]
-                                    ou_str = cand["pts"]["over_under"]
-                                if stat == "ast" and cand.get("ast"):
-                                    book_line = cand["ast"]["line"]
-                                    ou_str = cand["ast"]["over_under"]
-                                if stat == "reb" and cand.get("reb"):
-                                    book_line = cand["reb"]["line"]
-                                    ou_str = cand["reb"]["over_under"]
-                        except Exception:
-                            pass
+                        if player_name in game_odds:
+                            cand = game_odds[player_name]
+                            if stat == "pts" and cand.get("pts"):
+                                book_line = cand["pts"]["line"]
+                                ou_str = cand["pts"]["over_under"]
+                            if stat == "ast" and cand.get("ast"):
+                                book_line = cand["ast"]["line"]
+                                ou_str = cand["ast"]["over_under"]
+                            if stat == "reb" and cand.get("reb"):
+                                book_line = cand["reb"]["line"]
+                                ou_str = cand["reb"]["over_under"]
 
                         hit_rates = model.calculate_hit_rates(all_logs, stat, book_line)
                         pdata = {
@@ -206,23 +246,15 @@ def get_real_player_data():
                             }
                         }
                         results.append(pdata)
-
                 except Exception as e:
                     print(f"[get_data][ERROR] Failed processing player {player_name}: {e}")
                     continue
         
-        # --- FIX: COOL-DOWN PERIOD ---
-        # Wait for 10 seconds before starting the next game
-        # This breaks the high-frequency request pattern and avoids rate-limits
-        if TEST_MODE_ENABLED:
-            print(f"[get_data][TEST MODE] Processed 1 game. Stopping loop.")
-            break
-        else:
-            if i < len(games) - 1: # Don't sleep after the very last game
-                print(f"[get_data] Game {i+1} complete. Cooling down for 10 seconds...")
-                time.sleep(10)
+        # --- ROBUSTNESS FIX: COOL-DOWN PERIOD ---
+        if i < len(games) - 1: # Don't sleep after the very last game
+            print(f"[get_data] Game {i+1} complete. Cooling down for 15 seconds...")
+            time.sleep(15)
         # --- END OF FIX ---
-
 
     end = datetime.now()
     dur = (end - start).total_seconds()
@@ -230,27 +262,13 @@ def get_real_player_data():
     return results
 
 
-# Local Flask wrapper (for python api/get_data.py)
+# --- NEW: Main execution block ---
 if __name__ == "__main__":
-    from flask import Flask, jsonify
-    from flask_cors import CORS
-
-    app = Flask(__name__)
-    CORS(app)
-
-    print("[get_data] Loading .env from", env_path if 'env_path' in locals() else "(default)")
-    # already loaded above
-
-    @app.route("/api/get_data", methods=["GET"])
-    def local_get_data():
-        try:
-            data = get_real_player_data()
-            if isinstance(data, dict) and "error" in data:
-                return jsonify(data), 500
-            return jsonify(data), 200
-        except Exception as e:
-            print(f"[get_data][FATAL] {e}")
-            return jsonify({"error": str(e)}), 500
-
-    print("[get_data] Starting Flask dev server on port 5000")
-    app.run(debug=True, port=5000)
+    # This is what the GitHub Action "bot" will run
+    db = initialize_firebase()
+    if db:
+        player_data = get_real_player_data()
+        save_data_to_firestore(db, player_data)
+    else:
+        print("[get_data][FATAL] Could not initialize Firebase. Exiting.")
+        sys.exit(1)

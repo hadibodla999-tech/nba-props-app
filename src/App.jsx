@@ -5,9 +5,8 @@ import { initializeApp, getApp, getApps } from "firebase/app";
 import {
   getFirestore,
   doc,
-  getDoc,
-  setDoc,
   Timestamp,
+  onSnapshot, // <-- NEW: Use onSnapshot to listen for changes
 } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
@@ -39,7 +38,7 @@ onAuthStateChanged(auth, (user) => {
   }
 });
 
-// --- SVG Icons ---
+// --- SVG Icons (omitted for brevity, assume they are the same) ---
 const SunIcon = ({ className }) => (
   <svg
     className={className}
@@ -170,7 +169,6 @@ const BasketballLogo = ({ className }) => (
 );
 
 // --- Date Helpers ---
-// Get "2025-11-06" as the cache key
 const getTodayCacheKey = () => {
   const today = new Date();
   const year = today.getFullYear();
@@ -187,25 +185,20 @@ const getShortDate = (date) => {
 };
 
 // --- LOADING SCREEN COMPONENT ---
-function LoadingScreen({ onLoaded }) {
+// This is now the ONLY loading screen
+function LoadingScreen() {
   const [quoteVisible, setQuoteVisible] = useState(false);
 
   useEffect(() => {
     const quoteTimer = setTimeout(() => setQuoteVisible(true), 500);
-    const loadTimer = setTimeout(() => onLoaded(), 2000);
-
-    return () => {
-      clearTimeout(quoteTimer);
-      clearTimeout(loadTimer);
-    };
-  }, [onLoaded]);
+    return () => clearTimeout(quoteTimer);
+  }, []);
 
   return (
     <motion.div
       className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-900"
       initial={{ opacity: 1 }}
       animate={{ opacity: 1 }}
-      exit={{ opacity: 0, transition: { duration: 0.5 } }}
     >
       <div className="flex flex-col items-center justify-center text-center">
         <motion.div
@@ -221,6 +214,14 @@ function LoadingScreen({ onLoaded }) {
             style={{ animationDuration: "3s" }}
           />
         </motion.div>
+
+        <motion.p
+          className="mt-6 text-lg font-medium text-gray-700 dark:text-gray-300"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1, transition: { delay: 0.5 } }}
+        >
+          Loading player data...
+        </motion.p>
 
         {quoteVisible && (
           <motion.p
@@ -240,7 +241,7 @@ function LoadingScreen({ onLoaded }) {
   );
 }
 
-// --- Components ---
+// --- Components (Header, GameFilter, Filters, PlayerRow, PlayerTable, BetSheetPage... all are UNCHANGED) ---
 
 /**
  * Header Component
@@ -729,7 +730,6 @@ function HomePage({
   setSearchTerm,
   hitRateFilter,
   setHitRateFilter,
-  loading,
   selectedGameId,
   setSelectedGameId,
 }) {
@@ -746,29 +746,18 @@ function HomePage({
         hitRateFilter={hitRateFilter}
         setHitRateFilter={setHitRateFilter}
       />
-
-      {loading ? (
-        <motion.div
-          className="flex justify-center items-center h-64"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.5 }}
-        >
-          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-          <p className="ml-4 text-lg font-medium">
-            Running models & fetching data... (This may take a minute)
-          </p>
-        </motion.div>
-      ) : (
-        <PlayerTable
-          players={players}
-          setPlayers={setPlayers}
-          addPlayerToBetSheet={addPlayerToBetSheet}
-          hitRateFilter={hitRateFilter}
-          searchTerm={searchTerm}
-          selectedGameId={selectedGameId}
-        />
-      )}
+      {/* This table will now be empty until the data is loaded by the listener,
+        but it will not show a "loading" spinner, just "No players found."
+        This is fine.
+      */}
+      <PlayerTable
+        players={players}
+        setPlayers={setPlayers}
+        addPlayerToBetSheet={addPlayerToBetSheet}
+        hitRateFilter={hitRateFilter}
+        searchTerm={searchTerm}
+        selectedGameId={selectedGameId}
+      />
     </>
   );
 }
@@ -837,7 +826,7 @@ function BetSheetPage({ betSheet, removePlayerFromBetSheet }) {
                     <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700 dark:text-gray-300">
                       {player.stat}
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-sm font-medium">
+                    <td className="px-4 py-3 whitespace-nowLrap text-sm font-medium">
                       {player.bookLine !== null ? (
                         <span
                           className={
@@ -883,15 +872,18 @@ export default function App() {
   // --- State ---
   const [page, setPage] = useState("home");
   const [darkMode, setDarkMode] = useState(false);
-  const [appLoading, setAppLoading] = useState(true); // This is for the *initial* logo screen
-  const [dataLoading, setDataLoading] = useState(true); // This is for the *table* loading spinner
+
+  // --- NEW: Simplified Loading ---
+  // We are only "loading" until Firebase connects and gives us the cache.
+  const [appLoading, setAppLoading] = useState(true);
+
   const [allPlayers, setAllPlayers] = useState([]);
   const [betSheet, setBetSheet] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [hitRateFilter, setHitRateFilter] = useState("L5");
   const [selectedGameId, setSelectedGameId] = useState("all");
   const [authReady, setAuthReady] = useState(false);
-  const [error, setError] = useState(null); // For UI errors
+  const [error, setError] = useState(null);
 
   // --- Effects ---
 
@@ -909,145 +901,86 @@ export default function App() {
     if (!auth) {
       console.error("Firebase Auth is not initialized.");
       setError("App configuration error. Please contact support.");
-      setAuthReady(true); // Set to true to stop blocking
+      setAuthReady(true);
       return;
     }
-    const signIn = async () => {
-      onAuthStateChanged(auth, (user) => {
-        if (user) {
-          console.log("Firebase: User is signed in.");
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        console.log("Firebase: User is signed in.");
+        setAuthReady(true);
+      } else {
+        signInAnonymously(auth).then(() => {
+          console.log("Firebase: Signed in anonymously.");
           setAuthReady(true);
-        } else {
-          console.log("Firebase: No user, attempting to sign in.");
-          // This token is provided by the environment, if it exists
-          const token =
-            typeof __initial_auth_token !== "undefined"
-              ? __initial_auth_token
-              : null;
-          if (token) {
-            signInWithCustomToken(auth, token)
-              .then(() => {
-                console.log("Firebase: Signed in with custom token.");
-                setAuthReady(true);
-              })
-              .catch((error) => {
-                console.error("Firebase: Custom Auth Error:", error);
-                // Fallback to anonymous
-                signInAnonymously(auth).then(() => {
-                  console.log("Firebase: Signed in anonymously as fallback.");
-                  setAuthReady(true);
-                });
-              });
-          } else {
-            // Default to anonymous sign-in
-            signInAnonymously(auth).then(() => {
-              console.log("Firebase: Signed in anonymously.");
-              setAuthReady(true);
-            });
-          }
-        }
-      });
-    };
-    signIn();
-  }, []); // Empty dependency array means this runs once on mount
+        });
+      }
+    });
+    return () => unsub(); // Cleanup subscription
+  }, []);
 
-  // Effect for Initial Data Fetch with Caching
+  // --- NEW: Data Fetching Effect (Read-Only) ---
+  // This effect listens for the data prepared by the "bot"
   useEffect(() => {
-    // Wait until Firebase Auth is ready before trying to read/write data
     if (!authReady || !db) {
       console.log("Data Fetch: Waiting for auth to be ready.");
       return;
     }
 
-    const loadData = async () => {
-      console.log("Data Fetch: loadData() started.");
-      setDataLoading(true);
-      setError(null);
+    console.log("Data Fetch: Attaching Firestore listener.");
+    setAppLoading(true); // Show loading screen
+    setError(null);
 
-      const cacheKey = getTodayCacheKey();
-      const appId =
-        typeof __app_id !== "undefined" ? __app_id : "default-app-id";
-      // This is the public cache, shared by all users.
-      const cacheDocRef = doc(
-        db,
-        "artifacts",
-        appId,
-        "public/data/nba_props_cache",
-        cacheKey
-      );
+    const cacheKey = getTodayCacheKey();
+    const appId = typeof __app_id !== "undefined" ? __app_id : "default-app-id";
+    const cacheDocRef = doc(
+      db,
+      "artifacts",
+      appId,
+      "public/data/nba_props_cache",
+      cacheKey
+    );
 
-      try {
-        // 1. Check Firestore Cache
-        console.log(`Data Fetch: Checking cache at ${cacheDocRef.path}`);
-        const cacheDoc = await getDoc(cacheDocRef);
-
-        if (cacheDoc.exists()) {
-          console.log("Data Fetch: Cache HIT.");
-          const cacheData = cacheDoc.data();
-          // Check if cache is stale (e.g., older than 4 hours)
-          // Your cron job runs daily, so a 4-hour stale check is reasonable
-          const cacheAgeHours =
-            (Timestamp.now().seconds - cacheData.timestamp.seconds) / 3600;
-
-          if (cacheAgeHours < 4) {
-            console.log("Data Fetch: Cache is fresh. Loading from Firestore.");
-            setAllPlayers(JSON.parse(cacheData.playerData));
-            setDataLoading(false);
-            return; // We are done, loaded from cache
-          } else {
-            console.log("Data Fetch: Cache is stale. Fetching new data.");
+    // Use onSnapshot to listen for live updates
+    const unsubscribe = onSnapshot(
+      cacheDocRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          console.log("Data Fetch: Cache HIT. Data received from listener.");
+          const cacheData = docSnap.data();
+          try {
+            const players = JSON.parse(cacheData.playerData);
+            setAllPlayers(players);
+            setError(null); // Clear any previous errors
+          } catch (e) {
+            console.error("Data Fetch: Failed to parse cached data", e);
+            setError("Failed to load data (corrupted cache).");
+            setAllPlayers([]);
           }
         } else {
-          console.log("Data Fetch: Cache MISS.");
-        }
-
-        // 2. Cache MISS or STALE: Fetch from our serverless API
-        console.log("Data Fetch: Fetching from /api/get_data");
-        const response = await fetch("/api/get_data");
-        if (!response.ok) {
-          const errData = await response
-            .json()
-            .catch(() => ({ error: "Unknown API error" }));
-          throw new Error(
-            `API Error: ${response.statusText} - ${errData.error || "Unknown"}`
+          console.log("Data Fetch: Cache MISS. Waiting for bot to run.");
+          // This is normal if the bot hasn't run today yet
+          setError(
+            "No data found for today. The data-fetching bot may not have run yet."
           );
+          setAllPlayers([]);
         }
-        const data = await response.json();
-
-        if (!Array.isArray(data)) {
-          if (data.error) throw new Error(`API Error: ${data.error}`);
-          throw new Error("API did not return an array.");
-        }
-
-        console.log(
-          `Data Fetch: Fetched ${data.length} players. Saving to cache.`
-        );
-        setAllPlayers(data);
-
-        // 3. Save new data to Firestore cache
-        await setDoc(cacheDocRef, {
-          playerData: JSON.stringify(data), // Serialize data for Firestore
-          timestamp: Timestamp.now(),
-        });
-        console.log("Data Fetch: Saved to cache.");
-      } catch (err) {
-        console.error("Failed to load player data:", err);
-        setError(
-          `Failed to load data: ${err.message}. Make sure your Python server is running with 'vercel dev'.`
-        );
-      } finally {
-        setDataLoading(false);
+        setAppLoading(false); // Hide loading screen
+      },
+      (err) => {
+        console.error("Data Fetch: Firestore listener error:", err);
+        setError("Failed to connect to the database.");
+        setAllPlayers([]);
+        setAppLoading(false); // Hide loading screen
       }
-    };
+    );
 
-    loadData();
+    // Clean up the listener when the component unmounts
+    return () => unsubscribe();
   }, [authReady]); // Rerun this entire effect only when authReady changes
 
   // --- Handlers ---
 
-  const handleLoadScreenLoaded = () => {
-    setAppLoading(false); // This removes the full-screen logo loader
-  };
+  // Note: handleLoadScreenLoaded is no longer needed
 
   const toggleDarkMode = () => {
     setDarkMode((prev) => !prev);
@@ -1066,7 +999,8 @@ export default function App() {
   // --- Render ---
 
   if (appLoading) {
-    return <LoadingScreen onLoaded={handleLoadScreenLoaded} />;
+    // This now handles both initial auth and data loading
+    return <LoadingScreen />;
   }
 
   return (
@@ -1100,9 +1034,9 @@ export default function App() {
             setSearchTerm={setSearchTerm}
             hitRateFilter={hitRateFilter}
             setHitRateFilter={setHitRateFilter}
-            loading={dataLoading}
             selectedGameId={selectedGameId}
             setSelectedGameId={setSelectedGameId}
+            // loading prop is removed, as appLoading handles it
           />
         ) : (
           <BetSheetPage
