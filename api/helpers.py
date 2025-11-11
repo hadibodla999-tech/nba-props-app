@@ -115,7 +115,7 @@ def get_upcoming_games(days=2):
         sb = _nba_api_request_wrapper(
             lambda: scoreboardv2.ScoreboardV2(
                 game_date=date_str,
-                timeout=60,
+                timeout=120,
                 headers=HEADERS 
             ),
             f"ScoreboardV2({date_str})"
@@ -169,7 +169,7 @@ def get_team_stats(season="2025-26"):
         lambda: leaguedashteamstats.LeagueDashTeamStats(
             season=season, 
             measure_type_detailed_defense="Advanced",
-            timeout=60,
+            timeout=120,
             headers=HEADERS
         ),
         f"LeagueDashTeamStats({season})"
@@ -215,7 +215,7 @@ def get_team_roster(team_abbrev, season="2025-26"):
             lambda: commonteamroster.CommonTeamRoster(
                 team_id=team_id, 
                 season=season,
-                timeout=60,
+                timeout=120,
                 headers=HEADERS
             ),
             f"CommonTeamRoster({team_abbrev})"
@@ -247,7 +247,7 @@ def get_player_game_logs(player_id, season="2025-26"):
         lambda: playergamelog.PlayerGameLog(
             player_id=player_id, 
             season=season,
-            timeout=60,
+            timeout=120,
             headers=HEADERS
         ),
         f"PlayerGameLog({player_id}, {season})"
@@ -277,7 +277,7 @@ def get_player_position(player_name):
         info = _nba_api_request_wrapper(
             lambda: commonplayerinfo.CommonPlayerInfo(
                 player_id=pid,
-                timeout=60,
+                timeout=120,
                 headers=HEADERS
             ),
             f"CommonPlayerInfo({player_name})"
