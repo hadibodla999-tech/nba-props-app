@@ -1,52 +1,43 @@
-name: Fetch NBA Player Data
+# THIS IS THE NEW .github/workflows/main.yml FILE
+
+name: 'Run NBA Data Bot'
 
 on:
-  # Allows you to run this workflow manually from the Actions tab
+  # 1. Run this workflow automatically every day at 5:00 AM UTC
+  # (This is 10:00 AM in Pakistan, you can adjust this time)
+  schedule:
+    - cron: '0 5 * * *'
+  
+  # 2. Also allow running it manually from the "Actions" tab
   workflow_dispatch:
 
-  # Runs the script on a schedule
-  schedule:
-    # Runs at 0 minutes past the hour, every 6 hours
-    - cron: "0 */6 * * *"
-
 jobs:
-  build:
+  build-and-run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      # 1. Check out a copy of your repository
+      - name: 'Checkout Repository'
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      # 2. Set up the Python environment
+      - name: 'Set up Python'
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.11' # You can use 3.11, 3.12, etc.
 
-      - name: Install Python dependencies
+      # 3. Install the required Python libraries
+      - name: 'Install Dependencies'
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # We only need requests and firebase-admin for the backend
+          pip install requests firebase-admin python-dotenv
 
-      - name: 1. Debug - Check if Secrets are loaded
-        run: |
-          echo "Checking FIREBASE_ADMIN_KEY..."
-          if [ -z "${{ secrets.FIREBASE_ADMIN_KEY }}" ]; then
-            echo "FIREBASE_ADMIN_KEY secret is NOT set."
-            exit 1
-          else
-            echo "FIREBASE_ADMIN_KEY is SET."
-          fi
-
-          echo "Checking ODDS_API_KEY..."
-          if [ -z "${{ secrets.ODDS_API_KEY }}" ]; then
-            echo "ODDS_API_KEY secret is NOT set (this is optional)."
-          else
-            echo "ODDS_API_KEY is SET."
-          fi
-
-      - name: 2. Run the data fetching script
+      # 4. Run the bot script
+      - name: 'Run Bot Script (Fetch and Save Data)'
+        run: python api/get_data.py
         env:
+          # These are your GitHub Secrets.
+          # Your Python script will access these using os.environ.get()
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
           FIREBASE_ADMIN_KEY: ${{ secrets.FIREBASE_ADMIN_KEY }}
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: |
-          python api/get_data.py
